@@ -1,0 +1,90 @@
+"""Servo motor control (Raspberry Pi 5) using pigpio.
+
+Specs:
+ - Control Signal: PWM (servo pulses)
+ - Pulse width range: 500–2500 µs (0–360°)
+ - Neutral: 1500 µs
+ - Period: 20 ms (50 Hz)
+ - Direction: Counterclockwise from 1500 → 2000 µs
+
+Wiring:
+ - Servo signal to selected GPIO (BCM numbering)
+ - Servo V+ to external 5V supply (do NOT power from Pi 5V for high torque)
+ - Servo GND to supply GND and Pi GND (common ground required)
+
+Requires:
+ - pigpio daemon running: sudo systemctl enable pigpio; sudo systemctl start pigpio
+ - Python package: pigpio
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+import pigpio
+
+
+@dataclass
+class Servo360:
+	gpio: int
+	min_us: int = 500
+	max_us: int = 2500
+	neutral_us: int = 1500
+
+	def __post_init__(self) -> None:
+		self.pi = pigpio.pi()
+		if not self.pi.connected:
+			raise RuntimeError(
+				"pigpio daemon not running. Start with: sudo systemctl start pigpio"
+			)
+		# Set to a safe neutral on startup
+		self.set_pulse_us(self.neutral_us)
+
+	def set_pulse_us(self, pulse_us: int) -> None:
+		pulse_us = max(self.min_us, min(self.max_us, int(pulse_us)))
+		self.pi.set_servo_pulsewidth(self.gpio, pulse_us)
+
+	def angle_to_pulse_us(self, angle_deg: float) -> int:
+		# Map 0–360° to min–max microseconds
+		angle = max(0.0, min(360.0, float(angle_deg)))
+		span = self.max_us - self.min_us
+		return int(self.min_us + (angle / 360.0) * span)
+
+	def set_angle(self, angle_deg: float) -> None:
+		self.set_pulse_us(self.angle_to_pulse_us(angle_deg))
+
+	def neutral(self) -> None:
+		self.set_pulse_us(self.neutral_us)
+
+	def stop(self) -> None:
+		# 0 disables servo pulses
+		self.pi.set_servo_pulsewidth(self.gpio, 0)
+		self.pi.stop()
+
+
+def main() -> None:
+	# GPIO18 is a common hardware PWM-capable pin, but pigpio works on any GPIO
+	servo_gpio = 18
+	servo = Servo360(gpio=servo_gpio)
+
+	try:
+		# Example: sweep 0 → 360 → 0
+		for angle in range(0, 361, 15):
+			servo.set_angle(angle)
+			time.sleep(0.3)
+
+		for angle in range(360, -1, -15):
+			servo.set_angle(angle)
+			time.sleep(0.3)
+
+		# Hold neutral
+		servo.neutral()
+		time.sleep(1.0)
+
+	finally:
+		servo.stop()
+
+
+if __name__ == "__main__":
+	main()
